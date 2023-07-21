@@ -14,7 +14,14 @@ from dgl.nn.pytorch import GraphConv
     
 # Sends a message of node feature h
 # Equivalent to => return {'m': edges.src['h']}
-msg = fn.copy_src(src='h', out='m')
+msg = fn.copy_u('h'        #for i in range(n_layers - 1):
+        #    self.layers.append(GATLayer(hidden_dim * num_heads, hidden_dim, num_heads, dropout, self.batch_norm, self.residual))
+        #
+        #self.layers.append(GATLayer(hidden_dim * num_heads, out_dim, 1, dropout, self.batch_norm, self.residual))
+
+        #self.MLP_layer = MLPReadout(out_dim, n_classes)
+
+, 'm')
 reduce = fn.mean('m', 'h')
 
 class NodeApplyModule(nn.Module):

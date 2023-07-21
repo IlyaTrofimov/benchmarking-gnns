@@ -6,6 +6,7 @@
 from nets.TUs_graph_classification.gated_gcn_net import GatedGCNNet
 from nets.TUs_graph_classification.gcn_net import GCNNet
 from nets.TUs_graph_classification.gat_net import GATNet
+from nets.TUs_graph_classification.gat_top_net import GATTopNet
 from nets.TUs_graph_classification.graphsage_net import GraphSageNet
 from nets.TUs_graph_classification.gin_net import GINNet
 from nets.TUs_graph_classification.mo_net import MoNet as MoNet_
@@ -21,6 +22,9 @@ def GCN(net_params):
 
 def GAT(net_params):
     return GATNet(net_params)
+
+def GATTop(net_params):
+    return GATTopNet(net_params)
 
 def GraphSage(net_params):
     return GraphSageNet(net_params)
@@ -46,6 +50,7 @@ def gnn_model(MODEL_NAME, net_params):
         'GatedGCN': GatedGCN,
         'GCN': GCN,
         'GAT': GAT,
+        'GATTop': GATTop,
         'GraphSage': GraphSage,
         'GIN': GIN,
         'MoNet': MoNet_,

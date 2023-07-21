@@ -5,12 +5,189 @@ import torch.nn.functional as F
 import dgl
 from dgl.nn.pytorch import GATConv
 
+import sys
+sys.path.append('/ph_simple/lib/')
+import ph_simple
+import numpy as np
+
+
+
 """
     GAT: Graph Attention Network
     Graph Attention Networks (Veličković et al., ICLR 2018)
     https://arxiv.org/abs/1710.10903
 """
 
+class GATTopLayer(nn.Module):
+    """
+    Parameters
+    ----------
+    in_dim : 
+        Number of input features.
+    out_dim : 
+        Number of output features.
+    num_heads : int
+        Number of heads in Multi-Head Attention.
+    dropout :
+        Required for dropout of attn and feat in GATConv
+    batch_norm :
+        boolean flag for batch_norm layer.
+    residual : 
+        If True, use residual connection inside this layer. Default: ``False``.
+    activation : callable activation function/layer or None, optional.
+        If not None, applies an activation function to the updated node features.
+        
+    Using dgl builtin GATConv by default:
+    https://github.com/graphdeeplearning/benchmarking-gnns/commit/206e888ecc0f8d941c54e061d5dffcc7ae2142fc
+    """    
+    def __init__(self, in_dim, out_dim, num_heads, dropout, batch_norm, residual=False, activation=F.elu,
+                                                        h0_sum = True, top_node_feat = False, cycles = False):
+        super().__init__()
+        self.residual = residual
+        self.activation = activation
+        self.batch_norm = batch_norm
+        self.num_heads = num_heads
+
+        self.h0_sum = h0_sum
+        self.top_node_feat = top_node_feat
+        self.cycles = cycles
+
+        if top_node_feat:
+            minus_out_f = 2 * num_heads
+        else:
+            minus_out_f = 0
+            
+        if in_dim != (out_dim*num_heads):
+            self.residual = False
+
+        if dgl.__version__ < "0.5":
+            self.gatconv = GATConv(in_dim, out_dim - minus_out_f, num_heads, dropout, dropout)
+        else:
+            self.gatconv = GATConv(in_dim, out_dim - minus_out_f, num_heads, dropout, dropout, allow_zero_in_degree=True)
+
+        if self.batch_norm:
+            self.batchnorm_h = nn.BatchNorm1d(out_dim * num_heads)
+
+    def top_feat_fast(self, g, w, head_idx = 0):
+
+        batch_size = g.batch_size
+
+        # calc edge_ptr
+        edge_ptr = np.zeros(batch_size + 1, dtype = np.int32)
+        shift = 0
+
+        for i in range(batch_size):
+            shift += g.batch_num_edges()[i].item()
+            edge_ptr[i + 1] = shift
+
+        # calc node ptr
+        node_ptr = np.zeros(batch_size + 1, dtype = np.int32)
+
+        shift = 0
+        for i in range(batch_size):
+            shift += g.batch_num_nodes()[i].item()
+            node_ptr[i + 1] = shift
+
+        # calc h0_idx
+        w_slice = 1.0 - np.array(w[:, head_idx, 0].detach().cpu(), dtype = np.float32)
+        h0_idx = -np.ones(g.num_nodes(), dtype = np.int32)
+        h1_idx = -np.ones(g.num_edges(), dtype = np.int32)
+
+        edge_index_new = np.zeros(shape = (2, g.num_edges()), dtype = np.int32)
+        edge_index_new[0, :] = g.edges()[0]
+        edge_index_new[1, :] = g.edges()[1]
+        
+        for i in range(batch_size):
+            for j in range(edge_ptr[i], edge_ptr[i+1]):
+                edge_index_new[0, j] -= node_ptr[i]
+                edge_index_new[1, j] -= node_ptr[i]
+                #print(j, node_ptr[i], edge_index_new[0, j])
+
+        if self.h0_sum and self.cycles:
+            ph_simple.calc_barcodes_batch_cycles(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h1_idx, 1, 1)
+        elif self.h0_sum:
+            ph_simple.calc_barcodes_batch(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, 1)
+
+        # trainsform h0_idx to sum of weights
+        top_feat = torch.zeros((batch_size))
+
+        if self.h0_sum:
+
+            for i in range(batch_size):
+                for j in range(node_ptr[i], node_ptr[i+1]):
+                    edge_j = h0_idx[j]
+                    if edge_j != -1:
+                        top_feat[i] += 1 - w[edge_j, head_idx, 0]
+
+        # trainsform h1_idx to sum of weights
+        top_feat_cycles = torch.zeros((batch_size))
+
+        if self.cycles:
+
+            for i in range(batch_size):
+                for j in range(edge_ptr[i], edge_ptr[i+1]):
+                    edge_j = h1_idx[j]
+                    #print(i, j, edge_j)
+                    if edge_j != -1:
+                        top_feat_cycles[i] += 1 - w[edge_j, head_idx, 0]
+                    else:
+                        break
+
+        # node-based features
+        last_w = -torch.zeros(g.num_nodes())
+        sum_w = -torch.zeros(g.num_nodes())
+
+        if self.top_node_feat:
+
+            for j in range(g.num_nodes()):
+                edge_j = h0_idx[j]
+
+                if edge_j != -1:
+                    w_edge = 1 - w[edge_j, head_idx, 0]
+                    v1, v2 = g.edges()[0][edge_j], g.edges()[1][edge_j]
+        
+                    last_w[v1] = w_edge
+                    last_w[v2] = w_edge
+                    sum_w[v1] += w_edge
+                    sum_w[v2] += w_edge
+
+        return top_feat, top_feat_cycles, last_w, sum_w
+
+    def forward(self, g, h, top_features = False):
+        h_in = h # for residual connection
+
+        h_raw, attn = self.gatconv(g, h, get_attention = True)
+        h = h_raw.flatten(1)
+
+        top_feat = torch.zeros((g.batch_size, self.num_heads))
+        top_feat_cycles = torch.zeros((g.batch_size, self.num_heads))
+        last_w = torch.zeros((g.num_nodes(), self.num_heads))
+        sum_w = torch.zeros((g.num_nodes(), self.num_heads))
+
+        # top features
+        if top_features:
+            for head_idx in range(self.num_heads):
+                top_feat[:, head_idx], top_feat_cycles[:, head_idx], last_w[:, head_idx], sum_w[:, head_idx] = self.top_feat_fast(g, attn, head_idx)
+
+            if self.top_node_feat:
+                h = torch.concat((h, last_w, sum_w), axis = 1)
+
+        #print(h_in.shape, h.shape)
+            
+        if self.batch_norm:
+            h = self.batchnorm_h(h)
+            
+        if self.activation:
+            h = self.activation(h)
+            
+        if self.residual:
+            h = h_in + h # residual connection
+
+        if top_features:
+            return h, attn, top_feat, top_feat_cycles
+        else:
+            return h
+ 
 class GATLayer(nn.Module):
     """
     Parameters
@@ -54,7 +231,7 @@ class GATLayer(nn.Module):
         h_in = h # for residual connection
 
         h = self.gatconv(g, h).flatten(1)
-            
+
         if self.batch_norm:
             h = self.batchnorm_h(h)
             
