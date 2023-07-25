@@ -108,7 +108,7 @@ class GATTopLayer(nn.Module):
         if self.h0_sum and self.cycles:
             ph_simple.calc_barcodes_batch_cycles(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h1_idx, 1, 1)
         elif self.h0_sum or self.top_node_feat:
-            ph_simple.calc_barcodes_batch(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h0_e, 1)
+            ph_simple.calc_barcodes_batch2(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h0_e, 1)
 
         # trainsform h0_idx to sum of weights
         #if self.h0_sum:
