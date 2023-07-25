@@ -307,6 +307,7 @@ def main():
     parser.add_argument('--self_loop', help="Please give a value for self_loop")
     parser.add_argument('--max_time', help="Please give a value for max_time")
     args = parser.parse_args()
+    
     with open(args.config) as f:
         config = json.load(f)
         
@@ -435,14 +436,12 @@ def main():
     train_val_pipeline(MODEL_NAME, DATASET_NAME, params, net_params, dirs)
 
     
-
-    
-    
-    
-    
-    
-    
 main()    
+
+
+
+
+print(1)
 
 
 

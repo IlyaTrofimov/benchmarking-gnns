@@ -6,6 +6,7 @@
 from nets.molecules_graph_regression.gated_gcn_net import GatedGCNNet
 from nets.molecules_graph_regression.gcn_net import GCNNet
 from nets.molecules_graph_regression.gat_net import GATNet
+from nets.molecules_graph_regression.gat_top_net import GATTopNet
 from nets.molecules_graph_regression.graphsage_net import GraphSageNet
 from nets.molecules_graph_regression.gin_net import GINNet
 from nets.molecules_graph_regression.mo_net import MoNet as MoNet_
@@ -18,6 +19,9 @@ def GatedGCN(net_params):
 
 def GCN(net_params):
     return GCNNet(net_params)
+
+def GAT(net_params):
+    return GATNet(net_params)
 
 def GAT(net_params):
     return GATNet(net_params)
@@ -45,6 +49,7 @@ def gnn_model(MODEL_NAME, net_params):
         'GatedGCN': GatedGCN,
         'GCN': GCN,
         'GAT': GAT,
+        'GATTop': GATTopNet,
         'GraphSage': GraphSage,
         'GIN': GIN,
         'MoNet': MoNet,

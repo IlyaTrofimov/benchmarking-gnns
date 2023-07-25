@@ -9,7 +9,7 @@ import sys
 sys.path.append('/ph_simple/lib/')
 import ph_simple
 import numpy as np
-
+from torch_scatter import scatter
 
 
 """
@@ -53,7 +53,7 @@ class GATTopLayer(nn.Module):
         self.cycles = cycles
 
         if top_node_feat:
-            minus_out_f = 2 * num_heads
+            minus_out_f = 3 * num_heads
         else:
             minus_out_f = 0
             
@@ -89,38 +89,42 @@ class GATTopLayer(nn.Module):
             node_ptr[i + 1] = shift
 
         # calc h0_idx
-        w_slice = 1.0 - np.array(w[:, head_idx, 0].detach().cpu(), dtype = np.float32)
+        w_slice = 1 - np.array(w[:, head_idx, 0].detach().cpu(), dtype = np.float32)
         h0_idx = -np.ones(g.num_nodes(), dtype = np.int32)
         h1_idx = -np.ones(g.num_edges(), dtype = np.int32)
-
-        edge_index_new = np.zeros(shape = (2, g.num_edges()), dtype = np.int32)
-        edge_index_new[0, :] = g.edges()[0]
-        edge_index_new[1, :] = g.edges()[1]
         
-        for i in range(batch_size):
-            for j in range(edge_ptr[i], edge_ptr[i+1]):
-                edge_index_new[0, j] -= node_ptr[i]
-                edge_index_new[1, j] -= node_ptr[i]
-                #print(j, node_ptr[i], edge_index_new[0, j])
+        edge_index_new = np.zeros(shape = (2, g.num_edges()), dtype = np.int32)
+        edge_index_new[0, :] = g.edges()[0].cpu()
+        edge_index_new[1, :] = g.edges()[1].cpu()
+
+        #for i in range(batch_size):
+        #    for j in range(edge_ptr[i], edge_ptr[i+1]):
+        #        edge_index_new[0, j] -= node_ptr[i]
+        #        edge_index_new[1, j] -= node_ptr[i]
+
+        h0_e = np.ones(g.num_edges(), dtype = np.int32)
+        h0_e.fill(batch_size)
 
         if self.h0_sum and self.cycles:
             ph_simple.calc_barcodes_batch_cycles(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h1_idx, 1, 1)
-        elif self.h0_sum:
-            ph_simple.calc_barcodes_batch(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, 1)
+        elif self.h0_sum or self.top_node_feat:
+            ph_simple.calc_barcodes_batch(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h0_e, 1)
 
         # trainsform h0_idx to sum of weights
-        top_feat = torch.zeros((batch_size))
+        #if self.h0_sum:
+        #
+        #   for i in range(batch_size):
+        #        for j in range(node_ptr[i], node_ptr[i+1]):
+        #            edge_j = h0_idx[j]
+        #            if edge_j != -1:
+        #                top_feat[i] += 1 - w[edge_j, head_idx, 0]
 
-        if self.h0_sum:
-
-            for i in range(batch_size):
-                for j in range(node_ptr[i], node_ptr[i+1]):
-                    edge_j = h0_idx[j]
-                    if edge_j != -1:
-                        top_feat[i] += 1 - w[edge_j, head_idx, 0]
+        h0_e_torch = torch.tensor(h0_e, device = g.device, dtype = torch.int64)
+        out = scatter(1 - w[:,head_idx,0], h0_e_torch, reduce = 'sum')
+        top_feat = out[0:batch_size]
 
         # trainsform h1_idx to sum of weights
-        top_feat_cycles = torch.zeros((batch_size))
+        top_feat_cycles = torch.zeros((batch_size), device = w.device)
 
         if self.cycles:
 
@@ -134,24 +138,35 @@ class GATTopLayer(nn.Module):
                         break
 
         # node-based features
-        last_w = -torch.zeros(g.num_nodes())
-        sum_w = -torch.zeros(g.num_nodes())
+        first_w = torch.zeros(g.num_nodes(), device = w.device)
+        last_w = torch.zeros(g.num_nodes(), device = w.device)
+        sum_w = -torch.zeros(g.num_nodes(), device = w.device)
 
         if self.top_node_feat:
+
+            for j in reversed(range(g.num_nodes())):
+                edge_j = h0_idx[j]
+
+                if edge_j != -1:
+                    w_edge = 1 - w[edge_j, head_idx, 0]
+                    v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
+        
+                    first_w[v1] = w_edge
+                    first_w[v2] = w_edge
 
             for j in range(g.num_nodes()):
                 edge_j = h0_idx[j]
 
                 if edge_j != -1:
                     w_edge = 1 - w[edge_j, head_idx, 0]
-                    v1, v2 = g.edges()[0][edge_j], g.edges()[1][edge_j]
+                    v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
         
                     last_w[v1] = w_edge
                     last_w[v2] = w_edge
                     sum_w[v1] += w_edge
                     sum_w[v2] += w_edge
 
-        return top_feat, top_feat_cycles, last_w, sum_w
+        return top_feat, top_feat_cycles, first_w, last_w, sum_w
 
     def forward(self, g, h, top_features = False):
         h_in = h # for residual connection
@@ -159,18 +174,19 @@ class GATTopLayer(nn.Module):
         h_raw, attn = self.gatconv(g, h, get_attention = True)
         h = h_raw.flatten(1)
 
-        top_feat = torch.zeros((g.batch_size, self.num_heads))
-        top_feat_cycles = torch.zeros((g.batch_size, self.num_heads))
-        last_w = torch.zeros((g.num_nodes(), self.num_heads))
-        sum_w = torch.zeros((g.num_nodes(), self.num_heads))
+        top_feat = torch.zeros((g.batch_size, self.num_heads), device = h.device)
+        top_feat_cycles = torch.zeros((g.batch_size, self.num_heads), device = h.device)
+        first_w = torch.zeros((g.num_nodes(), self.num_heads), device = h.device)
+        last_w = torch.zeros((g.num_nodes(), self.num_heads), device = h.device)
+        sum_w = torch.zeros((g.num_nodes(), self.num_heads), device = h.device)
 
         # top features
         if top_features:
-            for head_idx in range(self.num_heads):
-                top_feat[:, head_idx], top_feat_cycles[:, head_idx], last_w[:, head_idx], sum_w[:, head_idx] = self.top_feat_fast(g, attn, head_idx)
+            for h_idx in range(self.num_heads):
+                top_feat[:, h_idx], top_feat_cycles[:, h_idx], first_w[:, h_idx], last_w[:, h_idx], sum_w[:, h_idx] = self.top_feat_fast(g, attn, h_idx)
 
             if self.top_node_feat:
-                h = torch.concat((h, last_w, sum_w), axis = 1)
+                h = torch.concat((h, first_w, last_w, sum_w), axis = 1)
 
         #print(h_in.shape, h.shape)
             
