@@ -34,7 +34,7 @@ class GATTopNet(nn.Module):
 
         self.h0_sum = True
         self.top_node_feat = False
-        self.cycles = False
+        self.cycles = True
         self.top_feat_active = 1.0
 
         #
@@ -59,6 +59,8 @@ class GATTopNet(nn.Module):
             extra_global_feats += 1
         if self.cycles:
             extra_global_feats += 1
+
+        print('extra_global_feats', extra_global_feats)
 
         self.MLP_layer = MLPReadout(out_dim + extra_global_feats * self.layers[self.top_layer_pos].num_heads, 1)
 
