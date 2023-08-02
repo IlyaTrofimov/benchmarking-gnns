@@ -88,48 +88,24 @@ class GATTopLayer(nn.Module):
             shift += g.batch_num_nodes()[i].item()
             node_ptr[i + 1] = shift
 
-        # calc h0_idx
+        # calculate persistent homology
         w_slice = 1 - np.array(w[:, head_idx, 0].detach().cpu(), dtype = np.float32)
         h0_idx = -np.ones(g.num_nodes(), dtype = np.int32)
-        #h1_idx = -np.ones(g.num_edges(), dtype = np.int32)
-        h1_e = np.ones(g.num_edges(), dtype = np.int32)
+        h0_e = np.zeros(g.num_edges(), dtype = np.int32)
+        h0_e.fill(batch_size)
+        h1_e = np.zeros(g.num_edges(), dtype = np.int32)
         h1_e.fill(batch_size)
         
         edge_index_new = np.zeros(shape = (2, g.num_edges()), dtype = np.int32)
         edge_index_new[0, :] = g.edges()[0].cpu()
         edge_index_new[1, :] = g.edges()[1].cpu()
 
-        #for i in range(batch_size):
-        #    for j in range(edge_ptr[i], edge_ptr[i+1]):
-        #        edge_index_new[0, j] -= node_ptr[i]
-        #        edge_index_new[1, j] -= node_ptr[i]
-
-        h0_e = np.ones(g.num_edges(), dtype = np.int32)
-        h0_e.fill(batch_size)
-
         multiproc = 1
         filter_cycles = 0
 
         ph_simple.calc_barcodes_batch_cycles(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h0_e, h1_e, filter_cycles, multiproc)
 
-        #import sys
-        #np.set_printoptions(threshold=1000)
-
-        #print(h1_idx)
-
-        #if self.h0_sum and self.cycles:
-        #    ph_simple.calc_barcodes_batch_cycles(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h1_idx, 1, 1)
-        #elif self.h0_sum or self.top_node_feat:
-        #    ph_simple.calc_barcodes_batch2(batch_size, edge_index_new, w_slice, edge_ptr, node_ptr, h0_idx, h0_e, 1)
-
-        # trainsform h0_idx to sum of weights
-        #if self.h0_sum:
-        #
-        #   for i in range(batch_size):
-        #        for j in range(node_ptr[i], node_ptr[i+1]):
-        #            edge_j = h0_idx[j]
-        #            if edge_j != -1:
-        #                top_feat[i] += 1 - w[edge_j, head_idx, 0]
+        # trainsform h0_e to sum of weights
 
         if self.h0_sum:
             h0_e_torch = torch.tensor(h0_e, device = g.device, dtype = torch.int64)
@@ -138,7 +114,7 @@ class GATTopLayer(nn.Module):
         else:
             top_feat = torch.zeros((batch_size), device = w.device)
 
-        # trainsform h1_idx to sum of weights
+        # trainsform h1_e to sum of weights
 
         if self.cycles:
             h1_e_torch = torch.tensor(h1_e, device = g.device, dtype = torch.int64)
@@ -146,17 +122,6 @@ class GATTopLayer(nn.Module):
             top_feat_cycles = out[0:batch_size]
         else:
             top_feat_cycles = torch.zeros((batch_size), device = w.device)
-
-        #print(h1_idx[edge_ptr[0]: edge_ptr[1]])
-
-        #    for i in range(batch_size):
-        #        for j in range(edge_ptr[i], edge_ptr[i+1]):
-        #            edge_j = h1_idx[j]
-        #            #print(i, j, edge_j)
-        #            if edge_j != -1:
-        #                top_feat_cycles[i] += 1 - w[edge_j, head_idx, 0]
-        #            else:
-        #                break
 
         # node-based features
         first_w = torch.zeros(g.num_nodes(), device = w.device)
