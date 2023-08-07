@@ -53,10 +53,12 @@ class GATTopLayer(nn.Module):
         self.cycles = cycles
 
         if top_node_feat:
-            minus_out_f = 3 * num_heads
-        else:
-            minus_out_f = 0
-            
+            self.top_node_feat_embed = nn.ModuleList([nn.Linear(num_heads, out_dim * num_heads), nn.ReLU()])
+        #    minus_out_f = 1
+        #else:
+        #    minus_out_f = 0
+        minus_out_f = 0
+
         if in_dim != (out_dim*num_heads):
             self.residual = False
 
@@ -126,31 +128,39 @@ class GATTopLayer(nn.Module):
         # node-based features
         first_w = torch.zeros(g.num_nodes(), device = w.device)
         last_w = torch.zeros(g.num_nodes(), device = w.device)
-        sum_w = -torch.zeros(g.num_nodes(), device = w.device)
-
+        sum_w = torch.zeros(g.num_nodes(), device = w.device)
+        
         if self.top_node_feat:
+            w_doubled = torch.cat((1 - w[:,head_idx,0], 1 - w[:,head_idx,0]))
+            index = torch.cat((g.edges()[0], g.edges()[1]))
+            sum_w = scatter(w_doubled, index, reduce = 'sum')
 
-            for j in reversed(range(g.num_nodes())):
-                edge_j = h0_idx[j]
+        #print(sum_w.shape)
+        #print(g.num_nodes())
 
-                if edge_j != -1:
-                    w_edge = 1 - w[edge_j, head_idx, 0]
-                    v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
-        
-                    first_w[v1] = w_edge
-                    first_w[v2] = w_edge
-
-            for j in range(g.num_nodes()):
-                edge_j = h0_idx[j]
-
-                if edge_j != -1:
-                    w_edge = 1 - w[edge_j, head_idx, 0]
-                    v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
-        
-                    last_w[v1] = w_edge
-                    last_w[v2] = w_edge
-                    sum_w[v1] += w_edge
-                    sum_w[v2] += w_edge
+        #if self.top_node_feat:
+        #
+        #    for j in reversed(range(g.num_nodes())):
+        #        edge_j = h0_idx[j]
+        #
+        #        if edge_j != -1:
+        #            w_edge = 1 - w[edge_j, head_idx, 0]
+        #            v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
+        #
+        #            first_w[v1] = w_edge
+        #            first_w[v2] = w_edge
+        #
+        #    for j in range(g.num_nodes()):
+        #        edge_j = h0_idx[j]
+        #
+        #        if edge_j != -1:
+        #            w_edge = 1 - w[edge_j, head_idx, 0]
+        #            v1, v2 = edge_index_new[0, edge_j], edge_index_new[1, edge_j]
+        #
+        #            last_w[v1] = w_edge
+        #            last_w[v2] = w_edge
+        #            sum_w[v1] += w_edge
+        #            sum_w[v2] += w_edge
 
         return top_feat, top_feat_cycles, first_w, last_w, sum_w
 
@@ -172,7 +182,12 @@ class GATTopLayer(nn.Module):
                 top_feat[:, h_idx], top_feat_cycles[:, h_idx], first_w[:, h_idx], last_w[:, h_idx], sum_w[:, h_idx] = self.top_feat_fast(g, attn, h_idx)
 
             if self.top_node_feat:
-                h = torch.concat((h, first_w, last_w, sum_w), axis = 1)
+                #h = torch.concat((h, first_w, last_w, sum_w), axis = 1)
+                e = sum_w
+                for layer in self.top_node_feat_embed:
+                    e = layer(e)
+                #h = torch.concat((h, sum_w), axis = 1)
+                h = h + e
 
         #print(h_in.shape, h.shape)
             

@@ -12,8 +12,6 @@ import dgl
 from layers.gat_layer import GATLayer, GATTopLayer
 from layers.mlp_readout_layer import MLPReadout
 
-import numpy as np
-
 class GATTopNet(nn.Module):
     def __init__(self, net_params):
         super().__init__()
@@ -22,41 +20,46 @@ class GATTopNet(nn.Module):
         out_dim = net_params['out_dim']
         n_classes = net_params['n_classes']
         num_heads = net_params['n_heads']
-        self.num_heads = num_heads
         in_feat_dropout = net_params['in_feat_dropout']
         dropout = net_params['dropout']
         n_layers = net_params['L']
         self.readout = net_params['readout']
         self.batch_norm = net_params['batch_norm']
         self.residual = net_params['residual']
-        
         self.dropout = dropout
-        self.top_feat_active = 1.0
         
-        self.embedding_h = nn.Linear(in_dim, hidden_dim * num_heads)
+        self.embedding_h = nn.Linear(in_dim, hidden_dim*num_heads)
         self.in_feat_dropout = nn.Dropout(in_feat_dropout)
+
+        self.h0_sum = True
+        self.top_node_feat = True
+        self.cycles = True
+        self.top_feat_active = 1.0
 
         #
         # create layers
         # 
-        self.top_layer_pos = 3
+        self.top_layer_pos = 2
         self.layers = nn.ModuleList([])
 
-        for i in range(n_layers - 1):
+        for i in range(n_layers - 2):
             self.layers.append(GATLayer(hidden_dim * num_heads, hidden_dim, num_heads, dropout, self.batch_norm, self.residual))
 
-        self.h0_sum = True
-        self.top_node_feat = False
-        self.cycles = False
-        
-        self.layers.append(GATTopLayer(hidden_dim * num_heads, out_dim, 1, dropout, self.batch_norm, self.residual,
+        self.layers.append(GATTopLayer(hidden_dim * num_heads, hidden_dim, num_heads, dropout, self.batch_norm, self.residual,
                                                                     h0_sum = self.h0_sum, top_node_feat = self.top_node_feat, cycles = self.cycles))
+
+        #self.layers.append(GATTopLayer(hidden_dim * num_heads, out_dim, 1, dropout, self.batch_norm, self.residual,
+        #                                                            h0_sum = self.h0_sum, top_node_feat = self.top_node_feat, cycles = self.cycles))
+
+        self.layers.append(GATLayer(hidden_dim * num_heads, out_dim, 1, dropout, self.batch_norm, self.residual))
 
         extra_global_feats = 0
         if self.h0_sum:
             extra_global_feats += 1
         if self.cycles:
             extra_global_feats += 1
+
+        print('extra_global_feats', extra_global_feats)
 
         self.MLP_layer = MLPReadout(out_dim + extra_global_feats * self.layers[self.top_layer_pos].num_heads, n_classes)
 
@@ -88,7 +91,7 @@ class GATTopNet(nn.Module):
             hg = torch.concat((hg, self.top_feat_active * top_feat_cycles), axis = 1)
  
         return self.MLP_layer(hg)
-    
+
     def loss(self, pred, label):
         criterion = nn.CrossEntropyLoss()
         loss = criterion(pred, label)

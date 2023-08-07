@@ -66,10 +66,6 @@ def gpu_setup(use_gpu, gpu_id):
 
 
 
-
-
-
-
 """
     VIEWING MODEL CONFIG AND PARAMS
 """
