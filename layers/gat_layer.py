@@ -53,7 +53,9 @@ class GATTopLayer(nn.Module):
         self.cycles = cycles
 
         if top_node_feat:
-            self.top_node_feat_embed = nn.ModuleList([nn.Linear(num_heads, out_dim * num_heads), nn.ReLU()])
+            self.top_node_feat_embed = nn.ModuleList([nn.Linear(num_heads, num_heads), nn.ReLU(), nn.Linear(num_heads, out_dim * num_heads)])
+
+        self.attn_nn = nn.ModuleList([nn.Linear(num_heads, num_heads), nn.ReLU(), nn.Linear(num_heads, num_heads)])
         #    minus_out_f = 1
         #else:
         #    minus_out_f = 0
@@ -71,6 +73,16 @@ class GATTopLayer(nn.Module):
             self.batchnorm_h = nn.BatchNorm1d(out_dim * num_heads)
 
     def top_feat_fast(self, g, w, head_idx = 0):
+
+        #print(w.shape)
+
+        w = torch.squeeze(w)
+
+        for layer in self.attn_nn:
+            w = layer(w)
+
+        #print(w.shape)
+
 
         batch_size = g.batch_size
 
@@ -91,7 +103,7 @@ class GATTopLayer(nn.Module):
             node_ptr[i + 1] = shift
 
         # calculate persistent homology
-        w_slice = 1 - np.array(w[:, head_idx, 0].detach().cpu(), dtype = np.float32)
+        w_slice = 1 - np.array(w[:, head_idx].detach().cpu(), dtype = np.float32)
         h0_idx = -np.ones(g.num_nodes(), dtype = np.int32)
         h0_e = np.zeros(g.num_edges(), dtype = np.int32)
         h0_e.fill(batch_size)
@@ -111,7 +123,7 @@ class GATTopLayer(nn.Module):
 
         if self.h0_sum:
             h0_e_torch = torch.tensor(h0_e, device = g.device, dtype = torch.int64)
-            out = scatter(1 - w[:,head_idx,0], h0_e_torch, reduce = 'sum')
+            out = scatter(1 - w[:,head_idx], h0_e_torch, reduce = 'sum')
             top_feat = out[0:batch_size]
         else:
             top_feat = torch.zeros((batch_size), device = w.device)
@@ -120,7 +132,7 @@ class GATTopLayer(nn.Module):
 
         if self.cycles:
             h1_e_torch = torch.tensor(h1_e, device = g.device, dtype = torch.int64)
-            out = scatter(1 - w[:,head_idx,0], h1_e_torch, reduce = 'sum')
+            out = scatter(1 - w[:,head_idx], h1_e_torch, reduce = 'sum')
             top_feat_cycles = out[0:batch_size]
         else:
             top_feat_cycles = torch.zeros((batch_size), device = w.device)
@@ -131,7 +143,7 @@ class GATTopLayer(nn.Module):
         sum_w = torch.zeros(g.num_nodes(), device = w.device)
         
         if self.top_node_feat:
-            w_doubled = torch.cat((1 - w[:,head_idx,0], 1 - w[:,head_idx,0]))
+            w_doubled = torch.cat((1 - w[:,head_idx], 1 - w[:,head_idx]))
             index = torch.cat((g.edges()[0], g.edges()[1]))
             sum_w = scatter(w_doubled, index, reduce = 'sum')
 
@@ -184,6 +196,7 @@ class GATTopLayer(nn.Module):
             if self.top_node_feat:
                 #h = torch.concat((h, first_w, last_w, sum_w), axis = 1)
                 e = sum_w
+                #print(sum_w.shape)
                 for layer in self.top_node_feat_embed:
                     e = layer(e)
                 #h = torch.concat((h, sum_w), axis = 1)
